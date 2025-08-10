@@ -1,0 +1,8 @@
+{
+  "name": "silent-push-vercel",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2"
+  }
+}
