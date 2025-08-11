@@ -1,4 +1,4 @@
-# SilentPushTracker
+# SilentPushTracker Vercel
 
 SwiftUI app that counts silent push notifications.
 
