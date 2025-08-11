@@ -1,4 +1,4 @@
-// Sends an APNs *silent* push to a single device token.
+lp // Sends an APNs *silent* push to a single device token.
 // POST JSON: { "token": "<apns-device-token>" }
 
 import jwt from "jsonwebtoken";
@@ -42,7 +42,7 @@ export default async function handler(req, res) {
 
     // Silent payload → your iOS already increments on receipt; no UI alert
     const payload = JSON.stringify({
-      aps: { "content-available": 1 },
+      aps: { "content-available": 1, "badge": 5 },
       meta: { source: "vercel", at: new Date().toISOString() }
     });
 
