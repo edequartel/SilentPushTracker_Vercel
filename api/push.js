@@ -33,7 +33,7 @@ export default async function handler(req, res) {
       ":method": "POST",
       ":path": `/3/device/${token}`,
       "apns-topic": bundleId,            // your app bundle id
-      "apns-push-type": "alert",    // silent/background
+      "apns-push-type": "background",    // silent/background
       "apns-priority": "10",              // low priority, background delivery
       "authorization": `bearer ${jwtToken}`
     };
@@ -45,13 +45,14 @@ export default async function handler(req, res) {
       // aps: { "content-available": 1, "badge": 7136},
       
       aps: {
-  alert: { title: "Bird alert", body: "A new species was observed" },
-  badge: 15,
-  sound: "default",
-  "content-available": 1
-},
+        alert: { title: "Bird alert", body: "A new species was observed" },
+//        badge: 15,
+//        sound: "default",
+        "content-available": 1
+     },
       
       meta: { source: "vercel", at: new Date().toISOString() }
+    
     });
 
 
