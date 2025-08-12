@@ -2,118 +2,102 @@
 import jwt from "jsonwebtoken";
 import { connect } from "http2";
 
-// Ensure Node runtime (not Edge)
-export const config = {
-  api: { bodyParser: true },
-};
+export const config = { api: { bodyParser: true } };
 
 export default async function handler(req, res) {
-  // UptimeRobot often sends HEAD; respond OK without doing work
-  if (req.method === "HEAD") {
-    res.setHeader("Content-Type", "application/json");
-    return res.status(200).end(); // no body for HEAD
+  // Allow HEAD (UptimeRobot), GET (cron), POST (manual test)
+  if (!["GET", "POST", "HEAD"].includes(req.method)) {
+    return res.status(405).json({ error: "Use GET/POST/HEAD" });
   }
 
-  // Allow GET for cron, POST for manual testing
-  if (req.method !== "GET" && req.method !== "POST") {
-    return res.status(405).json({ error: "Use GET (cron) or POST" });
-  }
-
-  // Parse body safely
+  // Parse body (POST) and query (GET)
   let body = {};
   try {
-    if (typeof req.body === "string") {
-      body = JSON.parse(req.body);
-    } else if (req.body && typeof req.body === "object") {
-      body = req.body;
-    }
-  } catch {
-    // ignore parse errors
+    if (typeof req.body === "string") body = JSON.parse(req.body);
+    else if (req.body) body = req.body;
+  } catch {}
+
+  const qsToken = req.query?.token; // allow ?token=...
+  const token = body.token || qsToken || process.env.APNS_DEVICE_TOKEN;
+
+  // If HEAD, just say “OK” quickly so UptimeRobot is happy
+  if (req.method === "HEAD") {
+    return res.status(200).end();
   }
 
-  const token = body.token || process.env.APNS_DEVICE_TOKEN;
   if (!token) {
-    return res
-      .status(400)
-      .json({ error: "Missing device token (body.token or APNS_DEVICE_TOKEN)" });
+    // Still return 200 so UptimeRobot doesn’t keep retrying forever,
+    // but report the issue in JSON.
+    return res.status(200).json({ ok: false, reason: "Missing device token" });
   }
 
-  try {
-    const key = (process.env.APNS_KEY || "").replace(/\\n/g, "\n");
-    const teamId = process.env.APNS_TEAM_ID;
-    const keyId = process.env.APNS_KEY_ID;
-    const bundleId = process.env.APNS_BUNDLE_ID;
-    const useSandbox = (process.env.APNS_USE_SANDBOX || "true") === "true";
+  // Prepare APNs JWT bits
+  const key = (process.env.APNS_KEY || "").replace(/\\n/g, "\n");
+  const teamId = process.env.APNS_TEAM_ID;
+  const keyId = process.env.APNS_KEY_ID;
+  const bundleId = process.env.APNS_BUNDLE_ID;
+  const useSandbox = (process.env.APNS_USE_SANDBOX || "true") === "true";
 
-    if (!key || !teamId || !keyId || !bundleId) {
-      return res.status(500).json({ error: "Missing APNs env variables" });
-    }
+  if (!key || !teamId || !keyId || !bundleId) {
+    return res.status(200).json({ ok: false, reason: "Missing APNs env vars" });
+  }
 
-    // Create JWT for APNs (valid <= 60 min)
-    const jwtToken = jwt.sign(
-      { iss: teamId, iat: Math.floor(Date.now() / 1000) },
-      key,
-      { algorithm: "ES256", header: { alg: "ES256", kid: keyId } }
-    );
+  // Create JWT for APNs (valid <= 60 mins)
+  const jwtToken = jwt.sign(
+    { iss: teamId, iat: Math.floor(Date.now() / 1000) },
+    key,
+    { algorithm: "ES256", header: { alg: "ES256", kid: keyId } }
+  );
 
-    const authority = useSandbox
-      ? "https://api.sandbox.push.apple.com"
-      : "https://api.push.apple.com";
+  // Build APNs request
+  const authority = useSandbox ? "api.sandbox.push.apple.com" : "api.push.apple.com";
+  const path = `/3/device/${token}`;
 
-    const client = connect(authority);
+  const payload = {
+    // Silent push
+    "aps": { "content-available": 1 }
+    // Add custom keys if your app expects them, e.g. "reason": "cron"
+  };
 
-    // Bubble up connection errors instead of crashing
-    const clientError = new Promise((_, reject) =>
-      client.on("error", (err) => reject(err))
-    );
+  // Fire-and-respond-fast: don’t block UptimeRobot on APNs round-trip
+  sendApns(jwtToken, authority, path, bundleId, payload)
+    .then((status) => console.log("APNs sent:", status))
+    .catch((e) => console.error("APNs error:", e?.message || e));
+
+  // Immediate OK for the monitor
+  return res.status(200).json({ ok: true, submitted: true });
+}
+
+function sendApns(jwtToken, authority, path, bundleId, payload) {
+  return new Promise((resolve, reject) => {
+    const client = connect(`https://${authority}`);
+
+    client.on("error", reject);
 
     const headers = {
       ":method": "POST",
-      ":path": `/3/device/${token}`,
+      ":path": path,
       "apns-topic": bundleId,
-      "apns-push-type": "background", // silent push
-      "apns-priority": "5", // background delivery
-      authorization: `bearer ${jwtToken}`,
+      authorization: `bearer ${jwtToken}`
     };
 
-    const req2 = client.request(headers);
-    let timedOut = false;
+    const req = client.request(headers);
+    req.setTimeout(8000); // be defensive
 
-    // Fail fast on slow networks so UptimeRobot doesn't mark it down
-    req2.setTimeout(8000, () => {
-      timedOut = true;
-      try { req2.close(); } catch {}
+    req.on("response", (headers) => {
+      let data = "";
+      req.on("data", (chunk) => (data += chunk));
+      req.on("end", () => {
+        client.close();
+        resolve({ status: headers[":status"], body: data });
+      });
     });
 
-    const payload = JSON.stringify({
-      aps: { "content-available": 1 },
-      meta: { source: "vercel-cron", at: new Date().toISOString() },
+    req.on("error", (e) => {
+      client.close();
+      reject(e);
     });
 
-    let apnsBody = "";
-    req2.setEncoding("utf8");
-    req2.on("data", (chunk) => (apnsBody += chunk));
-
-    const requestDone = new Promise((resolve, reject) => {
-      req2.on("response", () => {});
-      req2.on("end", resolve);
-      req2.on("error", reject);
-    });
-
-    req2.end(payload);
-
-    // Race request vs client error
-    await Promise.race([requestDone, clientError]);
-
-    client.close();
-
-    if (timedOut) {
-      return res.status(504).json({ error: "APNs request timed out" });
-    }
-
-    return res.status(200).json({ ok: true, apnsResponse: apnsBody || "accepted" });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: e?.message || "APNs send failed" });
-  }
+    req.end(JSON.stringify(payload));
+  });
 }
