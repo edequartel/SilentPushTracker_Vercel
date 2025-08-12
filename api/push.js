@@ -49,7 +49,7 @@ export default async function handler(req, res) {
   badge: 5,
   sound: "default",
   "content-available": 1
-}
+},
       
       meta: { source: "vercel", at: new Date().toISOString() }
     });
