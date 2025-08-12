@@ -62,7 +62,7 @@ export default async function handler(req, res) {
     const payload = JSON.stringify({
       //aps: { "content-available": 1 },
       aps: {
-  alert: { title: "Bird alert", body: "A new species was observed" },
+  alert: { title: "Cron Bird alert", body: "A new species was observed" },
   //badge: 55,
   sound: "default",
   "content-available": 1
