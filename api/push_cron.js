@@ -63,7 +63,7 @@ export default async function handler(req, res) {
       //aps: { "content-available": 1 },
       aps: {
   alert: { title: "Bird alert", body: "A new species was observed" },
-  //badge: 5,
+  badge: 55,
   sound: "default",
   "content-available": 1
 },
