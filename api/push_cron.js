@@ -1,104 +1,85 @@
 // api/push_cron.js
-// GET method
 import jwt from "jsonwebtoken";
 import { connect } from "http2";
 
+// No bodyParser needed for GET cron jobs
 export const config = { api: { bodyParser: true } };
 
 export default async function handler(req, res) {
-  // Allow HEAD (UptimeRobot), GET (cron), POST (manual test)
-  if (!["GET", "POST", "HEAD"].includes(req.method)) {
-    return res.status(405).json({ error: "Use GET/POST/HEAD" });
+  // Allow GET for cron, POST for manual testing
+  if (req.method !== "GET" && req.method !== "POST") {
+    return res.status(405).json({ error: "Use GET (cron) or POST" });
   }
 
-  // Parse body (POST) and query (GET)
+  // For POST, allow overriding token via body; for GET, use env var
   let body = {};
   try {
-    if (typeof req.body === "string") body = JSON.parse(req.body);
-    else if (req.body) body = req.body;
-  } catch {}
-
-  const qsToken = req.query?.token; // allow ?token=...
-  const token = body.token || qsToken || process.env.APNS_DEVICE_TOKEN;
-
-  // If HEAD, just say “OK” quickly so UptimeRobot is happy
-  if (req.method === "HEAD") {
-    return res.status(200).end();
+    if (req.body && typeof req.body === "string") {
+      body = JSON.parse(req.body);
+    } else if (req.body) {
+      body = req.body;
+    }
+  } catch {
+    // ignore parse errors
   }
-
+  const token = body.token || process.env.APNS_DEVICE_TOKEN;
   if (!token) {
-    // Still return 200 so UptimeRobot doesn’t keep retrying forever,
-    // but report the issue in JSON.
-    return res.status(200).json({ ok: false, reason: "Missing device token" });
+    return res
+      .status(400)
+      .json({ error: "Missing device token (body.token or APNS_DEVICE_TOKEN)" });
   }
 
-  // Prepare APNs JWT bits
-  const key = (process.env.APNS_KEY || "").replace(/\\n/g, "\n");
-  const teamId = process.env.APNS_TEAM_ID;
-  const keyId = process.env.APNS_KEY_ID;
-  const bundleId = process.env.APNS_BUNDLE_ID;
-  const useSandbox = (process.env.APNS_USE_SANDBOX || "true") === "true";
+  try {
+    const key = (process.env.APNS_KEY || "").replace(/\\n/g, "\n");
+    const teamId = process.env.APNS_TEAM_ID;
+    const keyId = process.env.APNS_KEY_ID;
+    const bundleId = process.env.APNS_BUNDLE_ID;
+    const useSandbox = (process.env.APNS_USE_SANDBOX || "true") === "true";
 
-  if (!key || !teamId || !keyId || !bundleId) {
-    return res.status(200).json({ ok: false, reason: "Missing APNs env vars" });
-  }
+    // Create JWT for APNs (valid <= 60 min)
+    const jwtToken = jwt.sign(
+      { iss: teamId, iat: Math.floor(Date.now() / 1000) },
+      key,
+      { algorithm: "ES256", header: { alg: "ES256", kid: keyId } }
+    );
 
-  // Create JWT for APNs (valid <= 60 mins)
-  const jwtToken = jwt.sign(
-    { iss: teamId, iat: Math.floor(Date.now() / 1000) },
-    key,
-    { algorithm: "ES256", header: { alg: "ES256", kid: keyId } }
-  );
-
-  // Build APNs request
-  const authority = useSandbox ? "api.sandbox.push.apple.com" : "api.push.apple.com";
-  const path = `/3/device/${token}`;
-
-  const payload = {
-    // Silent push
-    "aps": { "content-available": 1 }
-    // Add custom keys if your app expects them, e.g. "reason": "cron"
-  };
-
-  // Fire-and-respond-fast: don’t block UptimeRobot on APNs round-trip
-  sendApns(jwtToken, authority, path, bundleId, payload)
-    .then((status) => console.log("APNs sent:", status))
-    .catch((e) => console.error("APNs error:", e?.message || e));
-
-  // Immediate OK for the monitor
-  return res.status(200).json({ ok: true, submitted: true });
-}
-
-function sendApns(jwtToken, authority, path, bundleId, payload) {
-  return new Promise((resolve, reject) => {
-    const client = connect(`https://${authority}`);
-
-    client.on("error", reject);
+    const authority = useSandbox
+      ? "https://api.sandbox.push.apple.com"
+      : "https://api.push.apple.com";
+    const client = connect(authority);
 
     const headers = {
       ":method": "POST",
-      ":path": path,
+      ":path": `/3/device/${token}`,
       "apns-topic": bundleId,
-      authorization: `bearer ${jwtToken}`
+      "apns-push-type": "background", // silent push
+      "apns-priority": "5", // low priority, background delivery
+      authorization: `bearer ${jwtToken}`,
     };
 
-    const req = client.request(headers);
-    req.setTimeout(8000); // be defensive
+    const req2 = client.request(headers);
 
-    req.on("response", (headers) => {
-      let data = "";
-      req.on("data", (chunk) => (data += chunk));
-      req.on("end", () => {
-        client.close();
-        resolve({ status: headers[":status"], body: data });
-      });
+    const payload = JSON.stringify({
+      aps: { "content-available": 1 },
+      meta: { source: "vercel-cron", at: new Date().toISOString() },
     });
 
-    req.on("error", (e) => {
-      client.close();
-      reject(e);
-    });
+    let bodyResp = "";
+    req2.setEncoding("utf8");
+    req2.on("data", (chunk) => (bodyResp += chunk));
 
-    req.end(JSON.stringify(payload));
-  });
+    const done = new Promise((resolve) => req2.on("end", resolve));
+    req2.end(payload);
+    await done;
+    client.close();
+
+    return res
+      .status(200)
+      .json({ ok: true, apnsResponse: bodyResp || "accepted" });
+  } catch (e) {
+    console.error(e);
+    return res
+      .status(500)
+      .json({ error: e.message || "APNs send failed" });
+  }
 }
