@@ -41,11 +41,19 @@ export default async function handler(req, res) {
     const req2 = client.request(headers);
 
     // Silent payload → your iOS already increments on receipt; no UI alert
-    const payload = JSON.stringify({
-      aps: { "content-available": 1, "badge": 7136},
-      meta: { source: "vercel", at: new Date().toISOString() }
-    });
+    //const payload = JSON.stringify({
+      //aps: { "content-available": 1, "badge": 7136},
+      //meta: { source: "vercel", at: new Date().toISOString() }
+    //});
 
+aps: {
+  alert: { title: "Bird alert", body: "A new species was observed" },
+  badge: 5,
+  sound: "default",
+  "content-available": 1
+}
+
+//
     let body = "";
     req2.setEncoding("utf8");
     req2.on("data", chunk => (body += chunk));
