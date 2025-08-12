@@ -1,4 +1,4 @@
-lp // Sends an APNs *silent* push to a single device token.
+// Sends an APNs *silent* push to a single device token.
 // POST JSON: { "token": "<apns-device-token>" }
 
 import jwt from "jsonwebtoken";
