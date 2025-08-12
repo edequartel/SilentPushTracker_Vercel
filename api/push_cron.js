@@ -1,4 +1,5 @@
 // api/push_cron.js
+// GET method
 import jwt from "jsonwebtoken";
 import { connect } from "http2";
 
