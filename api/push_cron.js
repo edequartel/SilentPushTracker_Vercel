@@ -60,7 +60,14 @@ export default async function handler(req, res) {
     const req2 = client.request(headers);
 
     const payload = JSON.stringify({
-      aps: { "content-available": 1 },
+      //aps: { "content-available": 1 },
+      aps: {
+  alert: { title: "Bird alert", body: "A new species was observed" },
+  //badge: 5,
+  sound: "default",
+  "content-available": 1
+},
+//
       meta: { source: "vercel-cron", at: new Date().toISOString() },
     });
 
