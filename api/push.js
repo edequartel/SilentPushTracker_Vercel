@@ -33,7 +33,7 @@ export default async function handler(req, res) {
       ":method": "POST",
       ":path": `/3/device/${token}`,
       "apns-topic": bundleId,            // your app bundle id
-      "apns-push-type": "background",    // silent/background
+      "apns-push-type": "alert",    // silent/background
       "apns-priority": "5",              // low priority, background delivery
       "authorization": `bearer ${jwtToken}`
     };
